@@ -330,6 +330,22 @@ namespace dxvk {
     // Assume we won't need this, and update the value if required
     output.previousPositionBuffer = RaytraceBuffer();
 
+    const bool genNormals = ((result == ObjectCacheState::KBuildBVH || result == ObjectCacheState::kUpdateBVH) && drawCallState.testCategoryFlags(InstanceCategories::GenSmoothNormals));
+    if(drawCallState.testCategoryFlags(InstanceCategories::GenSmoothNormals))
+    {
+      ONCE(Logger::err("processGeometryInfo: genNormals is true"));
+    }
+    if(genNormals && (result == ObjectCacheState::KBuildBVH) && !output.normalBuffer.defined())
+    {
+      ONCE(Logger::err("processGeometryInfo: genNormals && result is true"));
+      // DxvkBufferCreateInfo info = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
+      // info.usage = VK_BUFFER_USAGE_SHADER_DEVICE_ADDRESS_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_ACCELERATION_STRUCTURE_BUILD_INPUT_READ_ONLY_BIT_KHR;
+      // info.stages = VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_RAY_TRACING_SHADER_BIT_KHR;
+      // info.access = VK_ACCESS_TRANSFER_WRITE_BIT;
+      // info.size = align(input.vertexCount * sizeof(float) * 3, CACHE_LINE_SIZE);
+      // output.normalBuffer = m_device->createBuffer(info, memoryProperty, DxvkMemoryStats::Category::RTXAccelerationStructure, "Normal Buffer");
+    }
+
     const size_t vertexStride = (input.isVertexDataInterleaved() && input.areFormatsGpuFriendly()) ? input.positionBuffer.stride() : RtxGeometryUtils::computeOptimalVertexStride(input);
 
     switch (result) {

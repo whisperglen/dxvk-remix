@@ -43,6 +43,7 @@
 #include "rtx/pass/gen_tri_list_index_buffer.h"
 #include "rtx/pass/interleave_geometry_indices.h"
 #include "rtx/pass/interleave_geometry.h"
+#include "rtx/pass/gen_smooth_normals.h"
 
 namespace dxvk {
   static constexpr uint32_t kMaxInterleavedComponents = 3 + 3 + 2 + 1;
@@ -379,6 +380,106 @@ namespace dxvk {
     ctx->getCommandList()->trackResource<DxvkAccess::Write>(geo.positionBuffer.buffer());
     if (geo.normalBuffer.defined())
       ctx->getCommandList()->trackResource<DxvkAccess::Write>(geo.normalBuffer.buffer());
+  }
+
+  void RtxGeometryUtils::dispatchGenSmoothNormals(const Rc<DxvkContext>& ctx, 
+                                          const RaytraceGeometry& geo) {
+    
+    ScopedGpuProfileZone(ctx, "genSmoothNormals");
+
+    #if 0
+    const auto normalVertexFormat = drawCallState.getGeometryData().normalBuffer.vertexFormat();
+    if(normalVertexFormat != VK_FORMAT_R32G32B32_SFLOAT && normalVertexFormat != VK_FORMAT_R32G32B32A32_SFLOAT)
+    {
+      //nothing to do for spherical octahedral normals
+      return;
+    }
+
+    SmoothNormalsArgs params {};
+
+    // Note: VK_FORMAT_R32_UINT assumed to be 32 bit spherical octahedral normals.
+    assert(normalVertexFormat == VK_FORMAT_R32G32B32_SFLOAT || normalVertexFormat == VK_FORMAT_R32G32B32A32_SFLOAT);
+    //assert(drawCallState.getGeometryData().blendWeightBuffer.defined());
+
+    memcpy(&params.bones[0], &drawCallState.getSkinningState().pBoneMatrices[0], sizeof(Matrix4) * drawCallState.getSkinningState().numBones);
+
+    params.dstPositionStride = geo.positionBuffer.stride();
+    params.dstPositionOffset = geo.positionBuffer.offsetFromSlice();
+    params.dstNormalStride = geo.normalBuffer.stride();
+    params.dstNormalOffset = geo.normalBuffer.offsetFromSlice();
+    
+    params.srcPositionStride = drawCallState.getGeometryData().positionBuffer.stride();
+    params.srcPositionOffset = drawCallState.getGeometryData().positionBuffer.offsetFromSlice();
+    params.srcNormalStride = drawCallState.getGeometryData().normalBuffer.stride();
+    params.srcNormalOffset = drawCallState.getGeometryData().normalBuffer.offsetFromSlice();
+
+    params.numVertices = geo.vertexCount;
+    params.useIndices = drawCallState.getGeometryData().blendIndicesBuffer.defined() ? 1 : 0;
+    params.numBones = drawCallState.getGeometryData().numBonesPerVertex;
+    params.useOctahedralNormals = normalVertexFormat == VK_FORMAT_R32_UINT ? 1 : 0;
+
+    // If we don't have a mappable vertex buffer then we need to do this on the GPU
+    bool mustUseGPU = drawCallState.getGeometryData().positionBuffer.mapPtr() == nullptr;
+
+    // At some point, its more efficient to do these calculations on the GPU, this limit is somewhat arbitrary however, and might require better tuning...
+    const uint32_t kNumVerticesToProcessOnCPU = 256;
+
+    // Check we have appropriate CPU access
+    const bool pendingGpuWrite = drawCallState.getGeometryData().positionBuffer.isPendingGpuWrite() ||
+                                 drawCallState.getGeometryData().normalBuffer.isPendingGpuWrite() ||
+                                 drawCallState.getGeometryData().blendWeightBuffer.isPendingGpuWrite() ||
+                                 (drawCallState.getGeometryData().blendIndicesBuffer.defined() && drawCallState.getGeometryData().blendIndicesBuffer.isPendingGpuWrite());
+
+    const bool useCPU = params.numVertices <= kNumVerticesToProcessOnCPU && !pendingGpuWrite && !mustUseGPU;
+
+    if (!useCPU) {
+      // Setting alignment to device limit minUniformBufferOffsetAlignment because the offset value should be its multiple.
+      // See https://vulkan.lunarg.com/doc/view/1.2.189.2/windows/1.2-extensions/vkspec.html#VUID-VkWriteDescriptorSet-descriptorType-00327
+      const auto& devInfo = ctx->getDevice()->properties().core.properties;
+      VkDeviceSize alignment = devInfo.limits.minUniformBufferOffsetAlignment;
+
+      DxvkBufferSlice cb = m_pCbData->alloc(alignment, sizeof(SkinningArgs));
+      memcpy(cb.mapPtr(0), &params, sizeof(SkinningArgs));
+      ctx->getCommandList()->trackResource<DxvkAccess::Write>(cb.buffer());
+
+      ctx->bindResourceBuffer(BINDING_SKINNING_CONSTANTS, cb);
+      ctx->bindResourceBuffer(BINDING_POSITION_OUTPUT, geo.positionBuffer);
+      ctx->bindResourceBuffer(BINDING_POSITION_INPUT, drawCallState.getGeometryData().positionBuffer);
+      ctx->bindResourceBuffer(BINDING_NORMAL_OUTPUT, geo.normalBuffer);
+      ctx->bindResourceBuffer(BINDING_NORMAL_INPUT, drawCallState.getGeometryData().normalBuffer);
+      ctx->bindResourceBuffer(BINDING_BLEND_WEIGHT_INPUT, drawCallState.getGeometryData().blendWeightBuffer);
+
+      if (drawCallState.getGeometryData().blendIndicesBuffer.defined())
+        ctx->bindResourceBuffer(BINDING_BLEND_INDICES_INPUT, drawCallState.getGeometryData().blendIndicesBuffer);
+
+      ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, SkinningShader::getShader());
+
+      const VkExtent3D workgroups = util::computeBlockCount(VkExtent3D { params.numVertices, 1, 1 }, VkExtent3D { 128, 1, 1 });
+      ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
+      ctx->getCommandList()->trackResource<DxvkAccess::Read>(cb.buffer());
+    } else {
+      const float* srcPosition = reinterpret_cast<float*>(drawCallState.getGeometryData().positionBuffer.mapPtr(0));
+      const float* srcNormal = reinterpret_cast<float*>(drawCallState.getGeometryData().normalBuffer.mapPtr(0));
+      const float* srcBlendWeight = reinterpret_cast<float*>(drawCallState.getGeometryData().blendWeightBuffer.mapPtr(0));
+      const uint8_t* srcBlendIndices = reinterpret_cast<uint8_t*>(drawCallState.getGeometryData().blendIndicesBuffer.mapPtr(0));
+
+      // For CPU we are going to update a single entry at a time...
+      params.dstPositionStride = 0;
+      params.dstPositionOffset = 0;
+      params.dstNormalStride = 0;
+      params.dstNormalOffset = 0;
+
+      float dstPosition[3];
+      float dstNormal[3];
+
+      for (uint32_t idx = 0; idx < params.numVertices; idx++) {
+        skinning(idx, &dstPosition[0], &dstNormal[0], srcPosition, srcBlendWeight, srcBlendIndices, srcNormal, params);
+
+        ctx->writeToBuffer(geo.positionBuffer.buffer(), geo.positionBuffer.offsetFromSlice() + idx * geo.positionBuffer.stride(), sizeof(dstPosition), &dstPosition[0]);
+        ctx->writeToBuffer(geo.normalBuffer.buffer(), geo.normalBuffer.offsetFromSlice() + idx * geo.normalBuffer.stride(), sizeof(dstNormal), &dstNormal[0]);
+      }
+    }
+    #endif
   }
 
   // Calculates number of uTriangles to bake considering their triangle specific cost and an available budget.

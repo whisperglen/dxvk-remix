@@ -374,6 +374,8 @@ namespace dxvk {
     setCategory(InstanceCategories::Sky, lookupHash(RtxOptions::skyBoxTextures(), textureHash));
 
     setCategory(InstanceCategories::ParticleEmitter, lookupHash(RtxOptions::particleEmitterTextures(), textureHash));
+    
+    setCategory(InstanceCategories::GenSmoothNormals, lookupHash(RtxOptions::genSmoothNormalsTextures(), textureHash));
   }
 
   void DrawCallState::setupCategoriesForGeometry() {
