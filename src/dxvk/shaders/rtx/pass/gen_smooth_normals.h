@@ -33,14 +33,14 @@ typedef Vector4 float4;
 #else
 #define WriteBuffer(T) RWStructuredBuffer<T>
 #define ReadBuffer(T) StructuredBuffer<T>
-#define ConstBuffer(T) ConstantBuffer<T>
+#define ConstBuffer(T) T
 #define inline
 #endif
 
 inline float3 getElement(uint idx, uint offset, uint stride, ReadBuffer(float) buff)
 {
   const uint baseOffset = (offset + idx * stride) / 4;
-  float3 position = float3(buff[baseOffset + 0],
+  return float3(buff[baseOffset + 0],
                            buff[baseOffset + 1],
                            buff[baseOffset + 2]);
 }

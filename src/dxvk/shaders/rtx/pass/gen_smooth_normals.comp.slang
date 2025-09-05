@@ -22,6 +22,7 @@
 #pragma once
 
 #include "gen_smooth_normals_indices.h"
+#include "gen_smooth_normals.h"
 
 layout(binding = GEN_SMOOTH_NORMALS_BINDING_INDEX_INPUT) 
 StructuredBuffer<uint16_t> indices;

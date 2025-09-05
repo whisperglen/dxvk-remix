@@ -330,12 +330,12 @@ namespace dxvk {
     // Assume we won't need this, and update the value if required
     output.previousPositionBuffer = RaytraceBuffer();
 
-    const bool genNormals = ((result == ObjectCacheState::KBuildBVH || result == ObjectCacheState::kUpdateBVH) && drawCallState.testCategoryFlags(InstanceCategories::GenSmoothNormals));
+    const bool genNormals = drawCallState.testCategoryFlags(InstanceCategories::GenSmoothNormals);
     if(drawCallState.testCategoryFlags(InstanceCategories::GenSmoothNormals))
     {
       ONCE(Logger::err("processGeometryInfo: genNormals is true"));
     }
-    if(genNormals && (result == ObjectCacheState::KBuildBVH) && !output.normalBuffer.defined())
+    if(genNormals && !output.normalBuffer.defined())
     {
       ONCE(Logger::err("processGeometryInfo: genNormals && result is true"));
       // DxvkBufferCreateInfo info = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };

@@ -83,7 +83,7 @@ namespace dxvk {
     /**
      * \brief Execute a compute shader to generate Face Normals and Vertex Smooth Normals
      */
-    void dispatchGenSmoothNormals(const Rc<DxvkContext>& ctx, const RaytraceGeometry& geo);
+    void dispatchGenSmoothNormals(const Rc<DxvkContext>& ctx, const RasterGeometry& input, const RaytraceGeometry& geo);
 
     struct BakeOpacityMicromapDesc {
       uint8_t subdivisionLevel;
