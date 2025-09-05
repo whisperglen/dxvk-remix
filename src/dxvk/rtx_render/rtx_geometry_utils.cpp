@@ -30,6 +30,7 @@
 #include <rtx_shaders/bake_opacity_micromap.h>
 #include <rtx_shaders/decode_and_add_opacity.h>
 #include <rtx_shaders/interleave_geometry.h>
+#include <rtx_shaders/gen_smooth_normals.h>
 #include "dxvk_scoped_annotation.h"
 
 #include "rtx_context.h"
@@ -43,6 +44,7 @@
 #include "rtx/pass/gen_tri_list_index_buffer.h"
 #include "rtx/pass/interleave_geometry_indices.h"
 #include "rtx/pass/interleave_geometry.h"
+#include "rtx/pass/gen_smooth_normals_indices.h"
 #include "rtx/pass/gen_smooth_normals.h"
 
 namespace dxvk {
@@ -138,6 +140,20 @@ namespace dxvk {
     };
 
     PREWARM_SHADER_PIPELINE(InterleaveGeometryShader);
+
+    class GenSmoothNormals : public ManagedShader {
+      SHADER_SOURCE(InterleaveGenSmoothNormalsGeometryShader, VK_SHADER_STAGE_COMPUTE_BIT, gen_smooth_normals)
+
+      PUSH_CONSTANTS(GenSmoothNormalsArgs)
+
+      BEGIN_PARAMETER()
+        STRUCTURED_BUFFER(GEN_SMOOTH_NORMALS_BINDING_INDEX_INPUT)
+        STRUCTURED_BUFFER(GEN_SMOOTH_NORMALS_BINDING_POSITION_INPUT)
+        RW_STRUCTURED_BUFFER(GEN_SMOOTH_NORMALS_BINDING_NORMAL_OUTPUT)
+      END_PARAMETER()
+    };
+
+    PREWARM_SHADER_PIPELINE(GenSmoothNormals);
 
     float calcUVTileSizeSqr(const Matrix4& objectToWorld, const uint8_t* pVertex, size_t vertexStride, const uint8_t* pTexcoord, size_t texcoordStride, uint32_t vertex1, uint32_t vertex2, uint32_t vertex3) {
       const Vector4 p1 = objectToWorld * Vector4(*reinterpret_cast<const Vector3* const>(pVertex + vertexStride * vertex1), 1.f);
@@ -380,106 +396,6 @@ namespace dxvk {
     ctx->getCommandList()->trackResource<DxvkAccess::Write>(geo.positionBuffer.buffer());
     if (geo.normalBuffer.defined())
       ctx->getCommandList()->trackResource<DxvkAccess::Write>(geo.normalBuffer.buffer());
-  }
-
-  void RtxGeometryUtils::dispatchGenSmoothNormals(const Rc<DxvkContext>& ctx, 
-                                          const RaytraceGeometry& geo) {
-    
-    ScopedGpuProfileZone(ctx, "genSmoothNormals");
-
-    #if 0
-    const auto normalVertexFormat = drawCallState.getGeometryData().normalBuffer.vertexFormat();
-    if(normalVertexFormat != VK_FORMAT_R32G32B32_SFLOAT && normalVertexFormat != VK_FORMAT_R32G32B32A32_SFLOAT)
-    {
-      //nothing to do for spherical octahedral normals
-      return;
-    }
-
-    SmoothNormalsArgs params {};
-
-    // Note: VK_FORMAT_R32_UINT assumed to be 32 bit spherical octahedral normals.
-    assert(normalVertexFormat == VK_FORMAT_R32G32B32_SFLOAT || normalVertexFormat == VK_FORMAT_R32G32B32A32_SFLOAT);
-    //assert(drawCallState.getGeometryData().blendWeightBuffer.defined());
-
-    memcpy(&params.bones[0], &drawCallState.getSkinningState().pBoneMatrices[0], sizeof(Matrix4) * drawCallState.getSkinningState().numBones);
-
-    params.dstPositionStride = geo.positionBuffer.stride();
-    params.dstPositionOffset = geo.positionBuffer.offsetFromSlice();
-    params.dstNormalStride = geo.normalBuffer.stride();
-    params.dstNormalOffset = geo.normalBuffer.offsetFromSlice();
-    
-    params.srcPositionStride = drawCallState.getGeometryData().positionBuffer.stride();
-    params.srcPositionOffset = drawCallState.getGeometryData().positionBuffer.offsetFromSlice();
-    params.srcNormalStride = drawCallState.getGeometryData().normalBuffer.stride();
-    params.srcNormalOffset = drawCallState.getGeometryData().normalBuffer.offsetFromSlice();
-
-    params.numVertices = geo.vertexCount;
-    params.useIndices = drawCallState.getGeometryData().blendIndicesBuffer.defined() ? 1 : 0;
-    params.numBones = drawCallState.getGeometryData().numBonesPerVertex;
-    params.useOctahedralNormals = normalVertexFormat == VK_FORMAT_R32_UINT ? 1 : 0;
-
-    // If we don't have a mappable vertex buffer then we need to do this on the GPU
-    bool mustUseGPU = drawCallState.getGeometryData().positionBuffer.mapPtr() == nullptr;
-
-    // At some point, its more efficient to do these calculations on the GPU, this limit is somewhat arbitrary however, and might require better tuning...
-    const uint32_t kNumVerticesToProcessOnCPU = 256;
-
-    // Check we have appropriate CPU access
-    const bool pendingGpuWrite = drawCallState.getGeometryData().positionBuffer.isPendingGpuWrite() ||
-                                 drawCallState.getGeometryData().normalBuffer.isPendingGpuWrite() ||
-                                 drawCallState.getGeometryData().blendWeightBuffer.isPendingGpuWrite() ||
-                                 (drawCallState.getGeometryData().blendIndicesBuffer.defined() && drawCallState.getGeometryData().blendIndicesBuffer.isPendingGpuWrite());
-
-    const bool useCPU = params.numVertices <= kNumVerticesToProcessOnCPU && !pendingGpuWrite && !mustUseGPU;
-
-    if (!useCPU) {
-      // Setting alignment to device limit minUniformBufferOffsetAlignment because the offset value should be its multiple.
-      // See https://vulkan.lunarg.com/doc/view/1.2.189.2/windows/1.2-extensions/vkspec.html#VUID-VkWriteDescriptorSet-descriptorType-00327
-      const auto& devInfo = ctx->getDevice()->properties().core.properties;
-      VkDeviceSize alignment = devInfo.limits.minUniformBufferOffsetAlignment;
-
-      DxvkBufferSlice cb = m_pCbData->alloc(alignment, sizeof(SkinningArgs));
-      memcpy(cb.mapPtr(0), &params, sizeof(SkinningArgs));
-      ctx->getCommandList()->trackResource<DxvkAccess::Write>(cb.buffer());
-
-      ctx->bindResourceBuffer(BINDING_SKINNING_CONSTANTS, cb);
-      ctx->bindResourceBuffer(BINDING_POSITION_OUTPUT, geo.positionBuffer);
-      ctx->bindResourceBuffer(BINDING_POSITION_INPUT, drawCallState.getGeometryData().positionBuffer);
-      ctx->bindResourceBuffer(BINDING_NORMAL_OUTPUT, geo.normalBuffer);
-      ctx->bindResourceBuffer(BINDING_NORMAL_INPUT, drawCallState.getGeometryData().normalBuffer);
-      ctx->bindResourceBuffer(BINDING_BLEND_WEIGHT_INPUT, drawCallState.getGeometryData().blendWeightBuffer);
-
-      if (drawCallState.getGeometryData().blendIndicesBuffer.defined())
-        ctx->bindResourceBuffer(BINDING_BLEND_INDICES_INPUT, drawCallState.getGeometryData().blendIndicesBuffer);
-
-      ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, SkinningShader::getShader());
-
-      const VkExtent3D workgroups = util::computeBlockCount(VkExtent3D { params.numVertices, 1, 1 }, VkExtent3D { 128, 1, 1 });
-      ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
-      ctx->getCommandList()->trackResource<DxvkAccess::Read>(cb.buffer());
-    } else {
-      const float* srcPosition = reinterpret_cast<float*>(drawCallState.getGeometryData().positionBuffer.mapPtr(0));
-      const float* srcNormal = reinterpret_cast<float*>(drawCallState.getGeometryData().normalBuffer.mapPtr(0));
-      const float* srcBlendWeight = reinterpret_cast<float*>(drawCallState.getGeometryData().blendWeightBuffer.mapPtr(0));
-      const uint8_t* srcBlendIndices = reinterpret_cast<uint8_t*>(drawCallState.getGeometryData().blendIndicesBuffer.mapPtr(0));
-
-      // For CPU we are going to update a single entry at a time...
-      params.dstPositionStride = 0;
-      params.dstPositionOffset = 0;
-      params.dstNormalStride = 0;
-      params.dstNormalOffset = 0;
-
-      float dstPosition[3];
-      float dstNormal[3];
-
-      for (uint32_t idx = 0; idx < params.numVertices; idx++) {
-        skinning(idx, &dstPosition[0], &dstNormal[0], srcPosition, srcBlendWeight, srcBlendIndices, srcNormal, params);
-
-        ctx->writeToBuffer(geo.positionBuffer.buffer(), geo.positionBuffer.offsetFromSlice() + idx * geo.positionBuffer.stride(), sizeof(dstPosition), &dstPosition[0]);
-        ctx->writeToBuffer(geo.normalBuffer.buffer(), geo.normalBuffer.offsetFromSlice() + idx * geo.normalBuffer.stride(), sizeof(dstNormal), &dstNormal[0]);
-      }
-    }
-    #endif
   }
 
   // Calculates number of uTriangles to bake considering their triangle specific cost and an available budget.
@@ -836,6 +752,76 @@ namespace dxvk {
 
       ctx->writeToBuffer(dstSlice.buffer(), 0, cb.primCount * 3 * sizeof(uint16_t), dst);
     }
+  }
+
+  void RtxGeometryUtils::dispatchGenSmoothNormals(const Rc<DxvkContext>& ctx, 
+                                          const RaytraceGeometry& geo) {
+    
+    ScopedGpuProfileZone(ctx, "genSmoothNormals");
+
+    #if 1
+    if(!geo.usesIndices())
+    {
+      //cannot smooth normals without an idex list atm
+      return;
+    }
+    const auto normalVertexFormat = geo.normalBuffer.vertexFormat();
+    if(normalVertexFormat != VK_FORMAT_R32G32B32_SFLOAT && normalVertexFormat != VK_FORMAT_R32G32B32A32_SFLOAT)
+    {
+      //nothing to do for spherical octahedral normals
+      return;
+    }
+
+    GenSmoothNormalsArgs params {};
+
+    params.srcPositionStride = drawCallState.getGeometryData().positionBuffer.stride();
+    params.srcPositionOffset = drawCallState.getGeometryData().positionBuffer.offsetFromSlice();
+    params.dstNormalStride = geo.normalBuffer.stride();
+    params.dstNormalOffset = geo.normalBuffer.offsetFromSlice();
+
+    params.primCount = geo.calculatePrimitiveCount();
+    //params.useIndices = drawCallState.getGeometryData().blendIndicesBuffer.defined() ? 1 : 0;
+    params.useOctahedralNormals = 0;
+
+    // If we don't have a mappable vertex buffer then we need to do this on the GPU
+    const bool mustUseGPU = drawCallState.getGeometryData().positionBuffer.mapPtr() == nullptr ||
+                            geo.normalBuffer.mapPtr() == nullptr ||
+                            drawCallState.getGeometryData().indexBuffer.mapPtr() == nullptr;
+
+    // At some point, its more efficient to do these calculations on the GPU, this limit is somewhat arbitrary however, and might require better tuning...
+    const uint32_t kNumPrimitivesToProcessOnCPU = 256;
+
+    // Check we have appropriate CPU access
+    const bool pendingGpuWrite = drawCallState.getGeometryData().positionBuffer.isPendingGpuWrite() ||
+                                 geo.normalBuffer.isPendingGpuWrite() ||
+                                 drawCallState.getGeometryData().indexBuffer.isPendingGpuWrite();
+
+    const bool useCPU = params.primCount <= kNumPrimitivesToProcessOnCPU && !pendingGpuWrite && !mustUseGPU;
+
+    if (!useCPU) {
+      ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_INDEX_INPUT, drawCallState.getGeometryData().indexBuffer);
+      ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_POSITION_INPUT, drawCallState.getGeometryData().positionBuffer);
+      ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_NORMAL_OUTPUT, geo.normalBuffer);
+
+      ctx->setPushConstantBank(DxvkPushConstantBank::RTX);
+
+      ctx->pushConstants(0, sizeof(GenSmoothNormalsArgs), &params);
+
+      ctx->bindShader(VK_SHADER_STAGE_COMPUTE_BIT, GenSmoothNormals::getShader());
+
+      const VkExtent3D workgroups = util::computeBlockCount(VkExtent3D { params.primCount, 1, 1 }, VkExtent3D { 128, 1, 1 });
+      ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
+      ctx->getCommandList()->trackResource<DxvkAccess::Read>(cb.buffer());
+    } else {
+      const float* srcPosition = reinterpret_cast<float*>(drawCallState.getGeometryData().positionBuffer.mapPtr(0));
+      const uint16_t* srcIndices = reinterpret_cast<uint16_t*>(drawCallState.getGeometryData().indexBuffer.mapPtr(0));
+      const float* dstNormals = reinterpret_cast<float*>(geo.normalBuffer.mapPtr(0));
+
+      for (uint32_t idx = 0; idx < params.primCount; idx++) {
+        generateSmoothNormals(idx, srcIndices, srcPosition, dstNormals, params);
+      }
+    }
+    #endif
   }
 
   void RtxGeometryUtils::processGeometryBuffers(const InterleavedGeometryDescriptor& desc, RaytraceGeometry& output) {
