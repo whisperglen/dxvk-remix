@@ -784,7 +784,7 @@ namespace dxvk {
     // If we don't have a mappable vertex buffer then we need to do this on the GPU
     const bool mustUseGPU = input.positionBuffer.mapPtr() == nullptr ||
                             geo.normalBuffer.mapPtr() == nullptr ||
-                            input.indexBuffer.mapPtr() == nullptr;
+                            geo.indexBuffer.mapPtr() == nullptr;
 
     // At some point, its more efficient to do these calculations on the GPU, this limit is somewhat arbitrary however, and might require better tuning...
     const uint32_t kNumPrimitivesToProcessOnCPU = 256;
@@ -792,12 +792,12 @@ namespace dxvk {
     // Check we have appropriate CPU access
     const bool pendingGpuWrite = input.positionBuffer.isPendingGpuWrite() ||
                                  geo.normalBuffer.isPendingGpuWrite() ||
-                                 input.indexBuffer.isPendingGpuWrite();
+                                 geo.indexBuffer.isPendingGpuWrite();
 
     const bool useCPU = params.primCount <= kNumPrimitivesToProcessOnCPU && !pendingGpuWrite && !mustUseGPU;
 
     if (!useCPU) {
-      ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_INDEX_INPUT, input.indexBuffer);
+      ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_INDEX_INPUT, geo.indexBuffer);
       ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_POSITION_INPUT, input.positionBuffer);
       ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_NORMAL_OUTPUT, geo.normalBuffer);
 
