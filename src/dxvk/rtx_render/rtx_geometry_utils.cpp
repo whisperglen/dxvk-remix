@@ -759,12 +759,19 @@ namespace dxvk {
     ScopedGpuProfileZone(ctx, "genSmoothNormals");
 
     #if 1
-    if(!geo.usesIndices())
+    if(!input.usesIndices() || !input.normalBuffer.defined())
     {
-      //cannot smooth normals without an idex list atm
+      //cannot smooth normals without an idex list or a (preallocated) normalBuffer
       return;
     }
-    const auto normalVertexFormat = geo.normalBuffer.vertexFormat();
+
+    if(input.indexBuffer.indexType() != VK_INDEX_TYPE_UINT16)
+    {
+      //don't support 32-bit indices
+      return;
+    }
+
+    const auto normalVertexFormat = input.normalBuffer.vertexFormat();
     if(normalVertexFormat != VK_FORMAT_R32G32B32_SFLOAT && normalVertexFormat != VK_FORMAT_R32G32B32A32_SFLOAT)
     {
       //nothing to do for spherical octahedral normals
@@ -775,15 +782,15 @@ namespace dxvk {
 
     params.srcPositionStride = input.positionBuffer.stride();
     params.srcPositionOffset = input.positionBuffer.offsetFromSlice();
-    params.dstNormalStride = geo.normalBuffer.stride();
-    params.dstNormalOffset = geo.normalBuffer.offsetFromSlice();
+    params.dstNormalStride = input.normalBuffer.stride();
+    params.dstNormalOffset = input.normalBuffer.offsetFromSlice();
 
-    params.primCount = geo.calculatePrimitiveCount();
+    params.primCount = input.calculatePrimitiveCount();
     params.useOctahedralNormals = 0;
 
     // If we don't have a mappable vertex buffer then we need to do this on the GPU
     const bool mustUseGPU = input.positionBuffer.mapPtr() == nullptr ||
-                            geo.normalBuffer.mapPtr() == nullptr ||
+                            input.normalBuffer.mapPtr() == nullptr ||
                             geo.indexBuffer.mapPtr() == nullptr;
 
     // At some point, its more efficient to do these calculations on the GPU, this limit is somewhat arbitrary however, and might require better tuning...
@@ -791,7 +798,7 @@ namespace dxvk {
 
     // Check we have appropriate CPU access
     const bool pendingGpuWrite = input.positionBuffer.isPendingGpuWrite() ||
-                                 geo.normalBuffer.isPendingGpuWrite() ||
+                                 input.normalBuffer.isPendingGpuWrite() ||
                                  geo.indexBuffer.isPendingGpuWrite();
 
     const bool useCPU = params.primCount <= kNumPrimitivesToProcessOnCPU && !pendingGpuWrite && !mustUseGPU;
@@ -799,7 +806,7 @@ namespace dxvk {
     if (!useCPU) {
       ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_INDEX_INPUT, geo.indexBuffer);
       ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_POSITION_INPUT, input.positionBuffer);
-      ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_NORMAL_OUTPUT, geo.normalBuffer);
+      ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_NORMAL_OUTPUT, input.normalBuffer);
 
       ctx->setPushConstantBank(DxvkPushConstantBank::RTX);
 
@@ -812,7 +819,7 @@ namespace dxvk {
     } else {
       const float* srcPosition = reinterpret_cast<float*>(input.positionBuffer.mapPtr(0));
       const uint16_t* srcIndices = reinterpret_cast<uint16_t*>(input.indexBuffer.mapPtr(0));
-      float* dstNormals = reinterpret_cast<float*>(geo.normalBuffer.mapPtr(0));
+      float* dstNormals = reinterpret_cast<float*>(input.normalBuffer.mapPtr(0));
 
       for (uint32_t idx = 0; idx < params.primCount; idx++) {
         generateSmoothNormals(idx, srcIndices, srcPosition, dstNormals, params);
@@ -872,9 +879,9 @@ namespace dxvk {
     return stride;
   }
 
-  void RtxGeometryUtils::cacheVertexDataOnGPU(const Rc<DxvkContext>& ctx, const RasterGeometry& input, RaytraceGeometry& output) {
+  void RtxGeometryUtils::cacheVertexDataOnGPU(const Rc<DxvkContext>& ctx, const RasterGeometry& input, RaytraceGeometry& output, bool forceInterleave) {
     ScopedCpuProfileZone();
-    if (input.isVertexDataInterleaved() && input.areFormatsGpuFriendly()) {
+    if (input.isVertexDataInterleaved() && input.areFormatsGpuFriendly() && !forceInterleave) {
       const size_t vertexBufferSize = input.vertexCount * input.positionBuffer.stride();
       ctx->copyBuffer(output.historyBuffer[0], 0, input.positionBuffer.buffer(), input.positionBuffer.offset(), vertexBufferSize);
 

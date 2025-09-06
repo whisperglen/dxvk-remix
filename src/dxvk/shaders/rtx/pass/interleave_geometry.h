@@ -22,9 +22,13 @@
 #pragma once
 
 #include "../utility/packing_helpers.h"
+#include "../utility/shader_types.h"
 
 // This function can be executed on the CPU or GPU!!
 #ifdef __cplusplus
+namespace dxvk {
+typedef Vector3 float3;
+typedef Vector4 float4;
 #define asfloat(x) *reinterpret_cast<const float*>(&x)
 #define asuint(x) *reinterpret_cast<const uint32_t*>(&x)
 #define WriteBuffer(T) T*
@@ -82,7 +86,7 @@ namespace interleaver {
       float b = unorm8ToF32(uint8_t((data >> 16) & 0xFF));
       float g = unorm8ToF32(uint8_t((data >> 8) & 0xFF));
       float r = unorm8ToF32(uint8_t((data >> 0) & 0xFF));
-      return float3(r, g, b) * 2.f - 1.f;
+      return float3(r, g, b) * 2.f - float3(1, 1, 1);
     }
     case SupportedVkFormats::VK_FORMAT_A2B10G10R10_SNORM_PACK32:
     {
@@ -116,7 +120,7 @@ namespace interleaver {
     dst[idx * cb.outputStride + writeOffset++] = position.z;
 
     if (cb.hasNormals) {
-      float3 normals = convert(cb.normalFormat, srcNormal, srcVertexIndex * cb.normalStride + cb.normalOffset);
+      float3 normals = normalize(convert(cb.normalFormat, srcNormal, srcVertexIndex * cb.normalStride + cb.normalOffset));
       dst[idx * cb.outputStride + writeOffset++] = normals.x;
       dst[idx * cb.outputStride + writeOffset++] = normals.y;
       dst[idx * cb.outputStride + writeOffset++] = normals.z;
@@ -141,4 +145,5 @@ namespace interleaver {
 
 #undef asfloat
 #undef asuint
+}
 #endif

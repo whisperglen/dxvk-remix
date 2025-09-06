@@ -168,7 +168,7 @@ namespace dxvk {
     static void processGeometryBuffers(const InterleavedGeometryDescriptor& desc, RaytraceGeometry& output);
     static void processGeometryBuffers(const RasterGeometry& input, RaytraceGeometry& output);
     static size_t computeOptimalVertexStride(const RasterGeometry& input);
-    static void cacheVertexDataOnGPU(const Rc<DxvkContext>& ctx, const RasterGeometry& input, RaytraceGeometry& output);
+    static void cacheVertexDataOnGPU(const Rc<DxvkContext>& ctx, const RasterGeometry& input, RaytraceGeometry& output, bool needsNormalsGen);
     
     // Calculate the maximum UV tile size (i.e. minimum UV density) of a draw call.
     static float computeMaxUVTileSize(const RasterGeometry& input, const Matrix4& objectToWorld);

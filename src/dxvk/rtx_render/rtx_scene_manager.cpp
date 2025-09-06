@@ -331,11 +331,12 @@ namespace dxvk {
     output.previousPositionBuffer = RaytraceBuffer();
 
     const bool genNormalsFlag = drawCallState.testCategoryFlags(InstanceCategories::GenSmoothNormals);
+    bool forceGeometryInterleave = false;
     if(genNormalsFlag)
     {
       ONCE(Logger::err("processGeometryInfo: genNormals is true"));
 
-      if(!output.normalBuffer.defined() && result == ObjectCacheState::KBuildBVH)
+      if(!output.normalBuffer.defined() && result != ObjectCacheState::kUpdateInstance)
       {
         const uint32_t elemStride = sizeof(float) * 3;
         DxvkBufferCreateInfo info = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
@@ -345,8 +346,9 @@ namespace dxvk {
         info.size = align(input.vertexCount * elemStride, CACHE_LINE_SIZE);
         Rc<DxvkBuffer> normalsBuffer = m_device->createBuffer(info, memoryProperty, DxvkMemoryStats::Category::RTXBuffer, "Normal Buffer");
         ctx->clearBuffer(normalsBuffer, 0, info.size, 0);
-        input.normalBuffer = RasterBuffer(normalsBuffer, 0, elemStride, VK_FORMAT_R32G32B32_SFLOAT);
-        output.normalBuffer = input.normalBuffer;
+        const_cast<RasterGeometry&>(input).normalBuffer = RasterBuffer(DxvkBufferSlice(normalsBuffer), 0, elemStride, VK_FORMAT_R32G32B32_SFLOAT);
+        //output.normalBuffer = RaytraceBuffer(DxvkBufferSlice(normalsBuffer), 0, elemStride, VK_FORMAT_R32G32B32_SFLOAT);
+        forceGeometryInterleave = true;
       }
     }
 
@@ -385,18 +387,23 @@ namespace dxvk {
 
         if(genNormalsFlag)
         {
-          RtxGeometryUtils::dispatchGenSmoothNormals(ctx, input, output);
+          m_device->getCommon()->metaGeometryUtils().dispatchGenSmoothNormals(ctx, input, output);
         }
 
         info.size = align(vertexBufferSize, CACHE_LINE_SIZE);
         output.historyBuffer[0] = m_device->createBuffer(info, memoryProperty, DxvkMemoryStats::Category::RTXAccelerationStructure, "Geometry Buffer");
 
-        RtxGeometryUtils::cacheVertexDataOnGPU(ctx, input, output);
+        RtxGeometryUtils::cacheVertexDataOnGPU(ctx, input, output, forceGeometryInterleave);
 
         break;
       }
       case ObjectCacheState::kUpdateBVH: {
         bool invalidateHistory = false;
+
+        if(genNormalsFlag)
+        {
+          m_device->getCommon()->metaGeometryUtils().dispatchGenSmoothNormals(ctx, input, output);
+        }
 
         // Stride changed, so we must recreate the previous buffer and use identical data
         if (output.historyBuffer[0]->info().size != align(vertexStride * input.vertexCount, CACHE_LINE_SIZE)) {
@@ -419,7 +426,7 @@ namespace dxvk {
           output.historyBuffer[0] = m_device->createBuffer(output.historyBuffer[1]->info(), memoryProperty, DxvkMemoryStats::Category::RTXAccelerationStructure, "Geometry Buffer");
         } 
 
-        RtxGeometryUtils::cacheVertexDataOnGPU(ctx, input, output);
+        RtxGeometryUtils::cacheVertexDataOnGPU(ctx, input, output, forceGeometryInterleave);
 
         // Sometimes, we need to invalidate history, do that here by copying the current buffer to the previous..
         if (invalidateHistory) {
