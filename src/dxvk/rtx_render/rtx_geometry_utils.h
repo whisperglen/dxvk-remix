@@ -50,6 +50,8 @@ namespace dxvk {
     std::unique_ptr<RtxStagingDataAlloc> m_pCbData;
     Rc<DxvkContext> m_skinningContext;
     uint32_t m_skinningCommands = 0;
+    uint16_t *m_vertexSortScratchBuff = nullptr;
+    uint32_t m_vertexSortBuffSz = 0;
 
   public:
     explicit RtxGeometryUtils(DxvkDevice* pDevice);
@@ -80,6 +82,11 @@ namespace dxvk {
       const RaytraceGeometry& geo,
       const Matrix4& positionTransform) const;
 
+    /**
+     * \brief Detects Vertexes with the same 3D coordinates, and for each duplicated Vertex, posRemapBuffer will contain the position of the first Vertex in each chain
+     */
+    void remapDuplicatedVertexes(const RasterBuffer& vertexBuffer, uint16_t *posRemapBuffer);
+    
     /**
      * \brief Execute a compute shader to generate Face Normals and Vertex Smooth Normals
      */
@@ -158,6 +165,12 @@ namespace dxvk {
       uint32_t color0Offset = 0;
     };
 
+    struct VertexSortContext {
+      float* vertexBufferBase;
+      uint32_t offsetFromSlice;
+      uint32_t stride;
+    };
+
     // Helpers for promoting Geometry Snapshots from raster pipeline to Geometry Data for RT pipeline
     // Index related:
     static uint32_t getOptimalTriangleListSize(const RasterGeometry& input);
@@ -169,6 +182,11 @@ namespace dxvk {
     static void processGeometryBuffers(const RasterGeometry& input, RaytraceGeometry& output);
     static size_t computeOptimalVertexStride(const RasterGeometry& input);
     static void cacheVertexDataOnGPU(const Rc<DxvkContext>& ctx, const RasterGeometry& input, RaytraceGeometry& output, bool needsNormalsGen);
+    
+    // Helpers for the remapDulicatedVertexes procedure
+    static inline int vertexCompare( const float*, const float* );
+    static inline const float *vertexPtrFromIndex(const VertexSortContext *vsctx, uint16_t index);
+    static int vertexSort_comparefn( void*, void const*, void const* );
     
     // Calculate the maximum UV tile size (i.e. minimum UV density) of a draw call.
     static float computeMaxUVTileSize(const RasterGeometry& input, const Matrix4& objectToWorld);

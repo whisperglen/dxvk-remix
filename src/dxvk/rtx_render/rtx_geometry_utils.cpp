@@ -252,6 +252,12 @@ namespace dxvk {
   void RtxGeometryUtils::onDestroy() {
     m_pCbData = nullptr;
     m_skinningContext = nullptr;
+    if(m_vertexSortScratchBuff)
+    {
+      free(m_vertexSortScratchBuff);
+      m_vertexSortScratchBuff = nullptr;
+    }
+    m_vertexSortBuffSz = 0;
   }
 
   void RtxGeometryUtils::dispatchSkinning(const DrawCallState& drawCallState,
@@ -751,6 +757,102 @@ namespace dxvk {
       }
 
       ctx->writeToBuffer(dstSlice.buffer(), 0, cb.primCount * 3 * sizeof(uint16_t), dst);
+    }
+  }
+
+  inline int RtxGeometryUtils::vertexCompare( const float* a, const float* b )
+  {
+    const float epsilon = 1e-9f;
+
+    const float dx = a[0] - b[0];
+    if ( fabsf( dx ) < epsilon )
+    {
+      const float dy = a[1] - b[1];
+      if ( fabsf( dy ) < epsilon )
+      {
+        const float dz = a[2] - b[2];
+        if ( fabsf( dz ) < epsilon )
+        {
+          return 0;
+        }
+        else return (signbit( dz ) ? -1 : 1);
+      }
+      else return (signbit(dy) ? -1 : 1);
+    }
+    else return (signbit( dx ) ? -1 : 1);
+  }
+
+  inline const float* RtxGeometryUtils::vertexPtrFromIndex(const VertexSortContext *vsctx, uint16_t index)
+  {
+    const int vertexoffset = (vsctx->offsetFromSlice + vsctx->stride * index) / sizeof(float);
+    return &vsctx->vertexBufferBase[vertexoffset];
+  }
+
+  int RtxGeometryUtils::vertexSort_comparefn( void* context, void const* x0, void const* x1 )
+  {
+    const VertexSortContext* vsctx = static_cast<const VertexSortContext*>(context);
+    const float* a = vertexPtrFromIndex(vsctx, static_cast<const uint16_t*>(x0)[0]);
+    const float* b = vertexPtrFromIndex(vsctx, static_cast<const uint16_t*>(x1)[0]);
+    int res = vertexCompare( a, b );
+
+    if ( res == 0 )
+    {
+      //qsort is not stable so we need an extra check to avoid an equals result,
+      // and I also want the sorted items to be in the same order as the vertexArray,
+      // i.e. if pos 3,18,42 from vertexArray have the same 3D coords, I want them
+      // to appear in this same order in the sortedArray too
+      if ( a < b )
+        return -1;
+      return 1;
+    }
+    return res;
+  }
+
+  void RtxGeometryUtils::remapDuplicatedVertexes(const RasterBuffer& vertexBuffer, uint16_t *posRemapBuffer)
+  {
+    struct VertexSortContext vsctx;
+    vsctx.vertexBufferBase = (float*)vertexBuffer.mapPtr(0);
+    vsctx.offsetFromSlice = vertexBuffer.offsetFromSlice();
+    vsctx.stride = vertexBuffer.stride();
+
+    const uint32_t numVertexes = vertexBuffer.length();
+    if(numVertexes * 2 * sizeof(uint16_t) > m_vertexSortBuffSz)
+    {
+      m_vertexSortBuffSz = numVertexes * 2 * sizeof(uint16_t);
+      free(m_vertexSortScratchBuff);
+      m_vertexSortScratchBuff = (uint16_t*)malloc(m_vertexSortBuffSz);
+    }
+
+    //initialize the default buffer values: each vertex pos maps to itself
+    for(int i = 0; i < numVertexes; i++)
+    {
+      posRemapBuffer[i] = i;
+    }
+
+    const auto vertexFormat = vertexBuffer.vertexFormat();
+    if(m_vertexSortScratchBuff == nullptr || vertexFormat != VK_FORMAT_R32G32B32_SFLOAT)
+    {
+      m_vertexSortBuffSz = 0;
+      return;
+    }
+
+    qsort_s(m_vertexSortScratchBuff, numVertexes, 2 * sizeof(uint16_t), vertexSort_comparefn, &vsctx);
+
+    uint16_t backIndex = m_vertexSortScratchBuff[0];
+    const float* backVertex = vertexPtrFromIndex(&vsctx, backIndex);
+    for ( int i = 2; i < 2 * numVertexes; i+=2 )
+    {
+      uint16_t frontIndex =  m_vertexSortScratchBuff[i];
+      const float* frontVertex = vertexPtrFromIndex(&vsctx, frontIndex);
+      if ( 0 == vertexCompare( backVertex, frontVertex ) )
+      {
+        posRemapBuffer[m_vertexSortScratchBuff[i+1]] = backIndex;
+      }
+      else
+      {
+        backVertex = frontVertex;
+        backIndex = frontIndex;
+      }
     }
   }
 
