@@ -136,6 +136,7 @@ namespace dxvk {
       STRUCTURED_BUFFER(INTERLEAVE_GEOMETRY_BINDING_NORMAL_INPUT)
       STRUCTURED_BUFFER(INTERLEAVE_GEOMETRY_BINDING_TEXCOORD_INPUT)
       STRUCTURED_BUFFER(INTERLEAVE_GEOMETRY_BINDING_COLOR0_INPUT)
+      STRUCTURED_BUFFER(INTERLEAVE_GEOMETRY_BINDING_POSREMAP_INPUT)
       END_PARAMETER()
     };
 
@@ -150,6 +151,7 @@ namespace dxvk {
         STRUCTURED_BUFFER(GEN_SMOOTH_NORMALS_BINDING_INDEX_INPUT)
         STRUCTURED_BUFFER(GEN_SMOOTH_NORMALS_BINDING_POSITION_INPUT)
         RW_STRUCTURED_BUFFER(GEN_SMOOTH_NORMALS_BINDING_NORMAL_OUTPUT)
+        STRUCTURED_BUFFER(GEN_SMOOTH_NORMALS_BINDING_POSREMAP_INPUT)
       END_PARAMETER()
     };
 
@@ -815,8 +817,13 @@ namespace dxvk {
     vsctx.offsetFromSlice = vertexBuffer.offsetFromSlice();
     vsctx.stride = vertexBuffer.stride();
 
-    const uint32_t segment = 127;
-    const uint32_t numVertexes = (vertexBuffer.length() + segment) & ~segment;
+    if(!posRemapBuffer)
+    {
+      return;
+    }
+
+    const size_t segment = 128;
+    const uint32_t numVertexes = align(vertexBuffer.length(), segment);
     if(numVertexes * sizeof(uint16_t) > m_vertexSortBuffSz)
     {
       m_vertexSortBuffSz = numVertexes * sizeof(uint16_t);
@@ -865,22 +872,23 @@ namespace dxvk {
   }
   
   void RtxGeometryUtils::generateSmoothNormals(const Rc<DxvkContext>& ctx, const RasterGeometry& input, const RaytraceGeometry& geo) {
-    const VkDeviceSize segment = 127;
-    VkDeviceSize bufsz = (input.vertexCount + segment) & ~segment;
-    bufsz = align(bufsz * sizeof(uint16_t), CACHE_LINE_SIZE);
+    VkDeviceSize bufsz = align(input.vertexCount * sizeof(uint16_t), CACHE_LINE_SIZE);
     if(bufsz > m_vertexRemapSz)
     {
       m_vertexRemapSz = bufsz;
       if(m_vertexRemap != nullptr)
-        m_vertexRemap->release(DxvkAccess::Read);
+      {
+        //m_vertexRemap->release(DxvkAccess::Write);
+        m_vertexRemap->decRef();
+      }
       const Rc<DxvkDevice>& device = ctx->getDevice();
-      DxvkBufferCreateInfo info;
+      DxvkBufferCreateInfo info = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
       info.size = bufsz;
       info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-      info.stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
-      info.access = VK_ACCESS_TRANSFER_WRITE_BIT  | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+      info.stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
+      info.access = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT  | VK_ACCESS_SHADER_READ_BIT;
       m_vertexRemap = device->createBuffer(info, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, DxvkMemoryStats::Category::RTXBuffer, "SmoothNormals VertexRemap");
-      m_vertexRemap->acquire(DxvkAccess::Read);
+      //m_vertexRemap->acquire(DxvkAccess::Write);
     }
     remapDuplicatedVertexes(input.positionBuffer, (uint16_t*)(m_vertexRemap->mapPtr(0)));
 
@@ -927,7 +935,7 @@ namespace dxvk {
                             geo.indexBuffer.mapPtr() == nullptr;
 
     // At some point, its more efficient to do these calculations on the GPU, this limit is somewhat arbitrary however, and might require better tuning...
-    const uint32_t kNumPrimitivesToProcessOnCPU = 256;
+    const uint32_t kNumPrimitivesToProcessOnCPU = 64;
 
     // Check we have appropriate CPU access
     const bool pendingGpuWrite = input.positionBuffer.isPendingGpuWrite() ||
@@ -954,9 +962,10 @@ namespace dxvk {
       const float* srcPosition = reinterpret_cast<float*>(input.positionBuffer.mapPtr(0));
       const uint16_t* srcIndices = reinterpret_cast<uint16_t*>(input.indexBuffer.mapPtr(0));
       float* dstNormals = reinterpret_cast<float*>(input.normalBuffer.mapPtr(0));
+      const uint16_t* remapPos = reinterpret_cast<uint16_t*>(m_vertexRemap->mapPtr(0));
 
       for (uint32_t idx = 0; idx < params.primCount; idx++) {
-        dxvk::generateSmoothNormals(idx, srcIndices, srcPosition, dstNormals, (uint16_t*)(m_vertexRemap->mapPtr(0)), params);
+        dxvk::generateSmoothNormals(idx, srcIndices, srcPosition, dstNormals, remapPos, params);
       }
     }
     #endif

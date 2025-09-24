@@ -45,7 +45,6 @@ inline float3 getElement(uint idx, uint offset, uint stride, ReadBuffer(float) b
                            buff[baseOffset + 2]);
 }
 
-#define WEIGHTED_NORMALS 1
 void generateSmoothNormals(const uint32_t faceID, ReadBuffer(uint16_t) indices, ReadBuffer(float) positions, WriteBuffer(float) normals, ReadBuffer(uint16_t) posRemap, ConstBuffer(GenSmoothNormalsArgs) cb)
 {
   uint i0 = indices[faceID * 3 + 0];
@@ -59,11 +58,7 @@ void generateSmoothNormals(const uint32_t faceID, ReadBuffer(uint16_t) indices, 
   float3 edge1 = v1 - v0;
   float3 edge2 = v2 - v0;
 
-  #if WEIGHTED_NORMALS
-  float3 faceNormal = cross(edge1, edge2);
-  #else
   float3 faceNormal = normalize(cross(edge1, edge2));
-  #endif
 
   //vertex 0 normal
   const uint baseDstNormalOffset0 = (cb.dstNormalOffset + posRemap[i0] * cb.dstNormalStride) / 4;
