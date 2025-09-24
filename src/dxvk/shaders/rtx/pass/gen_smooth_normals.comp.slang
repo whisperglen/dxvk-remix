@@ -33,6 +33,9 @@ StructuredBuffer<float> positions;
 layout(binding = GEN_SMOOTH_NORMALS_BINDING_NORMAL_OUTPUT)
 RWStructuredBuffer<float> normals;
 
+layout(binding = GEN_SMOOTH_NORMALS_BINDING_POSREMAP_INPUT) 
+StructuredBuffer<uint16_t> posRemap;
+
 layout(push_constant)
 ConstantBuffer<GenSmoothNormalsArgs> cb;
 
@@ -46,5 +49,5 @@ void main(uint faceID : SV_DispatchThreadID)
     return;
   }
 
-  generateSmoothNormals(faceID, indices, positions, normals, cb);
+  generateSmoothNormals(faceID, indices, positions, normals, posRemap, cb);
 }

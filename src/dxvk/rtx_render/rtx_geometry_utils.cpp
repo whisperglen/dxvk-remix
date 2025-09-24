@@ -252,10 +252,10 @@ namespace dxvk {
   void RtxGeometryUtils::onDestroy() {
     m_pCbData = nullptr;
     m_skinningContext = nullptr;
-    if(m_vertexSortScratchBuff)
+    if(m_vertexSortBuff)
     {
-      free(m_vertexSortScratchBuff);
-      m_vertexSortScratchBuff = nullptr;
+      free(m_vertexSortBuff);
+      m_vertexSortBuff = nullptr;
     }
     m_vertexSortBuffSz = 0;
   }
@@ -815,12 +815,14 @@ namespace dxvk {
     vsctx.offsetFromSlice = vertexBuffer.offsetFromSlice();
     vsctx.stride = vertexBuffer.stride();
 
-    const uint32_t numVertexes = vertexBuffer.length();
-    if(numVertexes * 2 * sizeof(uint16_t) > m_vertexSortBuffSz)
+    const uint32 segment = 127;
+    const uint32_t numVertexes = (vertexBuffer.length() + segment) & ~segment;
+    if(numVertexes * sizeof(vertexPosRemap_t) > m_vertexSortBuffSz)
     {
-      m_vertexSortBuffSz = numVertexes * 2 * sizeof(uint16_t);
-      free(m_vertexSortScratchBuff);
-      m_vertexSortScratchBuff = (uint16_t*)malloc(m_vertexSortBuffSz);
+      m_vertexSortBuffSz = numVertexes * sizeof(vertexPosRemap_t);
+      if(m_vertexSortBuff)
+        free(m_vertexSortBuff);
+      m_vertexSortBuff = (vertexPosRemap_t*)malloc(m_vertexSortBuffSz);
     }
 
     //initialize the default buffer values: each vertex pos maps to itself
@@ -829,24 +831,25 @@ namespace dxvk {
       posRemapBuffer[i] = i;
     }
 
+    //now that posremapbuffer is initialised, check for malloc failure and unsupported vertex format
     const auto vertexFormat = vertexBuffer.vertexFormat();
-    if(m_vertexSortScratchBuff == nullptr || vertexFormat != VK_FORMAT_R32G32B32_SFLOAT)
+    if(m_vertexSortBuff == nullptr || vertexFormat != VK_FORMAT_R32G32B32_SFLOAT)
     {
       m_vertexSortBuffSz = 0;
       return;
     }
 
-    qsort_s(m_vertexSortScratchBuff, numVertexes, 2 * sizeof(uint16_t), vertexSort_comparefn, &vsctx);
+    qsort_s(m_vertexSortBuff, numVertexes, sizeof(vertexPosRemap_t), vertexSort_comparefn, &vsctx);
 
-    uint16_t backIndex = m_vertexSortScratchBuff[0];
+    uint16_t backIndex = m_vertexSortBuff[0][0];
     const float* backVertex = vertexPtrFromIndex(&vsctx, backIndex);
-    for ( int i = 2; i < 2 * numVertexes; i+=2 )
+    for ( int i = 1; i < numVertexes; i++ )
     {
-      uint16_t frontIndex =  m_vertexSortScratchBuff[i];
+      uint16_t frontIndex =  m_vertexSortBuff[i][0];
       const float* frontVertex = vertexPtrFromIndex(&vsctx, frontIndex);
       if ( 0 == vertexCompare( backVertex, frontVertex ) )
       {
-        posRemapBuffer[m_vertexSortScratchBuff[i+1]] = backIndex;
+        posRemapBuffer[m_vertexSortBuff[i][1]] = backIndex;
       }
       else
       {
@@ -854,6 +857,29 @@ namespace dxvk {
         backIndex = frontIndex;
       }
     }
+  }
+  
+  void RtxGeometryUtils::generateSmoothNormals(const Rc<DxvkContext>& ctx, const RasterGeometry& input, const RaytraceGeometry& geo) {
+    const VkDeviceSize segment = 127;
+    VkDeviceSize bufsz = (input.vertexCount + segment) & ~segment;
+    bufsz = align(bufsz * sizeof(uint16_t), CACHE_LINE_SIZE);
+    if(bufsz > m_vertexRemapSz)
+    {
+      m_vertexRemapSz = bufsz;
+      if(m_vertexRemap)
+        m_vertexRemap->release(DxvkAccess::Read);
+      const Rc<DxvkDevice>& device = ctx->getDevice();
+      DxvkBufferCreateInfo info;
+      info.size = bufsz;
+      info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
+      info.stages = VK_PIPELINE_STAGE_TRANSFER_BIT;
+      info.access = VK_ACCESS_TRANSFER_WRITE_BIT  | VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_SHADER_READ_BIT;
+      m_vertexRemap = device->createBuffer(info, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, DxvkMemoryStats::Category::RTXBuffer, "SmoothNormals VertexRemap");
+      m_vertexRemap->acquire(DxvkAccess::Read);
+    }
+    remapDuplicatedVertexes(input.positionBuffer, m_vertexRemap->mapPtr(0));
+
+    dispatchGenSmoothNormals(ctx, input, geo);
   }
 
   void RtxGeometryUtils::dispatchGenSmoothNormals(const Rc<DxvkContext>& ctx, const RasterGeometry& input, const RaytraceGeometry& geo) {
@@ -909,6 +935,7 @@ namespace dxvk {
       ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_INDEX_INPUT, geo.indexBuffer);
       ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_POSITION_INPUT, input.positionBuffer);
       ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_NORMAL_OUTPUT, input.normalBuffer);
+      ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_POSREMAP_INPUT, m_vertexRemap);
 
       ctx->setPushConstantBank(DxvkPushConstantBank::RTX);
 
@@ -924,7 +951,7 @@ namespace dxvk {
       float* dstNormals = reinterpret_cast<float*>(input.normalBuffer.mapPtr(0));
 
       for (uint32_t idx = 0; idx < params.primCount; idx++) {
-        generateSmoothNormals(idx, srcIndices, srcPosition, dstNormals, params);
+        generateSmoothNormals(idx, srcIndices, srcPosition, dstNormals, m_vertexRemap->mapPtr(0), params);
       }
     }
     #endif
@@ -1024,6 +1051,7 @@ namespace dxvk {
       return;
     }
     args.hasNormals = input.normalBuffer.defined();
+    args.hasPosRemap = forceInterleave;
     if (args.hasNormals) {
       mustUseGPU |= input.normalBuffer.isPendingGpuWrite() || input.normalBuffer.mapPtr() == nullptr;
       assert(input.normalBuffer.offsetFromSlice() % 4 == 0);
@@ -1075,6 +1103,8 @@ namespace dxvk {
         ctx->bindResourceBuffer(INTERLEAVE_GEOMETRY_BINDING_TEXCOORD_INPUT, input.texcoordBuffer);
       if (args.hasColor0)
         ctx->bindResourceBuffer(INTERLEAVE_GEOMETRY_BINDING_COLOR0_INPUT, input.color0Buffer);
+      if (args.hasPosRemap)
+        ctx->bindResourceBuffer(INTERLEAVE_GEOMETRY_BINDING_POSREMAP_INPUT, m_vertexRemap);
 
       ctx->setPushConstantBank(DxvkPushConstantBank::RTX);
 
@@ -1096,7 +1126,7 @@ namespace dxvk {
       args.color0Offset = 0;
 
       for (uint32_t i = 0; i < input.vertexCount; i++) {
-        interleaver::interleave(i, dst, inputData.positionData, inputData.normalData, inputData.texcoordData, inputData.vertexColorData, args);
+        interleaver::interleave(i, dst, inputData.positionData, inputData.normalData, inputData.texcoordData, inputData.vertexColorData, m_vertexRemap->mapPtr(0), args);
       }
 
       ctx->writeToBuffer(output.buffer, 0, input.vertexCount * output.stride, dst);

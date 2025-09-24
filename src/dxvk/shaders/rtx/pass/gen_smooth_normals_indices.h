@@ -28,6 +28,7 @@
 #define GEN_SMOOTH_NORMALS_BINDING_INDEX_INPUT           0
 #define GEN_SMOOTH_NORMALS_BINDING_POSITION_INPUT        1
 #define GEN_SMOOTH_NORMALS_BINDING_NORMAL_OUTPUT         2
+#define GEN_SMOOTH_NORMALS_BINDING_POSREMAP_INPUT        3
 
 /**
 * \brief Args required to generate Smooth Normals

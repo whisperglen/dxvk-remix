@@ -50,8 +50,11 @@ namespace dxvk {
     std::unique_ptr<RtxStagingDataAlloc> m_pCbData;
     Rc<DxvkContext> m_skinningContext;
     uint32_t m_skinningCommands = 0;
-    uint16_t *m_vertexSortScratchBuff = nullptr;
+    typedef vertexPosRemap_t uint16_t[2];
+    vertexPosRemap_t *m_vertexSortBuff = nullptr;
     uint32_t m_vertexSortBuffSz = 0;
+    Rc<DxvkBuffer> m_vertexRemap = nullptr;
+    uint32-t m_vertexRemapSz = 0;
 
   public:
     explicit RtxGeometryUtils(DxvkDevice* pDevice);
@@ -81,6 +84,11 @@ namespace dxvk {
       Rc<DxvkContext> ctx,
       const RaytraceGeometry& geo,
       const Matrix4& positionTransform) const;
+
+    /**
+     * \brief Try to generate Vertex Smooth Normals by merging face normals
+     */
+    void generateSmoothNormals(const Rc<DxvkContext>& ctx, const RasterGeometry& input, const RaytraceGeometry& geo);
 
     /**
      * \brief Detects Vertexes with the same 3D coordinates, and for each duplicated Vertex, posRemapBuffer will contain the position of the first Vertex in each chain

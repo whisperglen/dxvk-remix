@@ -27,6 +27,7 @@ struct InterleaveGeometryArgs {
   uint32_t positionFormat;
 
   uint32_t hasNormals;
+  uint32_t hasPosRemap;
   uint32_t normalOffset;
   uint32_t normalStride;
   uint32_t normalFormat;
@@ -51,3 +52,4 @@ struct InterleaveGeometryArgs {
 #define INTERLEAVE_GEOMETRY_BINDING_NORMAL_INPUT     2
 #define INTERLEAVE_GEOMETRY_BINDING_TEXCOORD_INPUT   3
 #define INTERLEAVE_GEOMETRY_BINDING_COLOR0_INPUT     4
+#define INTERLEAVE_GEOMETRY_BINDING_POSREMAP_INPUT   5

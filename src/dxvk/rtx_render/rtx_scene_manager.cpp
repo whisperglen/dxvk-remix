@@ -387,7 +387,7 @@ namespace dxvk {
 
         if(genNormalsFlag)
         {
-          m_device->getCommon()->metaGeometryUtils().dispatchGenSmoothNormals(ctx, input, output);
+          m_device->getCommon()->metaGeometryUtils().generateSmoothNormals(ctx, input, output);
         }
 
         info.size = align(vertexBufferSize, CACHE_LINE_SIZE);
@@ -402,7 +402,7 @@ namespace dxvk {
 
         if(genNormalsFlag)
         {
-          m_device->getCommon()->metaGeometryUtils().dispatchGenSmoothNormals(ctx, input, output);
+          m_device->getCommon()->metaGeometryUtils().generateSmoothNormals(ctx, input, output);
         }
 
         // Stride changed, so we must recreate the previous buffer and use identical data

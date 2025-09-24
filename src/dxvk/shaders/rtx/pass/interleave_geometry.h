@@ -109,7 +109,7 @@ namespace interleaver {
     return uint3(1,1,1);
   }
 
-  void interleave(const uint32_t idx, WriteBuffer(float) dst, ReadBuffer(float) srcPosition, ReadBuffer(float) srcNormal, ReadBuffer(float) srcTexcoord, ReadBuffer(uint32_t) srcColor0, const InterleaveGeometryArgs cb) {
+  void interleave(const uint32_t idx, WriteBuffer(float) dst, ReadBuffer(float) srcPosition, ReadBuffer(float) srcNormal, ReadBuffer(float) srcTexcoord, ReadBuffer(uint32_t) srcColor0, ReadBuffer(uint16_t) posRemap, const InterleaveGeometryArgs cb) {
     const uint32_t srcVertexIndex = idx + cb.minVertexIndex;
 
     uint32_t writeOffset = 0;
@@ -120,7 +120,8 @@ namespace interleaver {
     dst[idx * cb.outputStride + writeOffset++] = position.z;
 
     if (cb.hasNormals) {
-      float3 normals = normalize(convert(cb.normalFormat, srcNormal, srcVertexIndex * cb.normalStride + cb.normalOffset));
+      uint32_t newVertexIndex = cb.hasPosRemap ? posRemap[srcVertexIndex] : srcVertexIndex;
+      float3 normals = normalize(convert(cb.normalFormat, srcNormal, newVertexIndex * cb.normalStride + cb.normalOffset));
       dst[idx * cb.outputStride + writeOffset++] = normals.x;
       dst[idx * cb.outputStride + writeOffset++] = normals.y;
       dst[idx * cb.outputStride + writeOffset++] = normals.z;

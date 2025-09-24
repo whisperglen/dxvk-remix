@@ -45,7 +45,8 @@ inline float3 getElement(uint idx, uint offset, uint stride, ReadBuffer(float) b
                            buff[baseOffset + 2]);
 }
 
-void generateSmoothNormals(const uint32_t faceID, ReadBuffer(uint16_t) indices, ReadBuffer(float) positions, WriteBuffer(float) normals, ConstBuffer(GenSmoothNormalsArgs) cb)
+#define WEIGHTED_NORMALS 1
+void generateSmoothNormals(const uint32_t faceID, ReadBuffer(uint16_t) indices, ReadBuffer(float) positions, WriteBuffer(float) normals, ReadBuffer(uint16_t) posRemap, ConstBuffer(GenSmoothNormalsArgs) cb)
 {
   uint i0 = indices[faceID * 3 + 0];
   uint i1 = indices[faceID * 3 + 1];
@@ -58,20 +59,24 @@ void generateSmoothNormals(const uint32_t faceID, ReadBuffer(uint16_t) indices, 
   float3 edge1 = v1 - v0;
   float3 edge2 = v2 - v0;
 
+  #if WEIGHTED_NORMALS
+  float3 faceNormal = cross(edge1, edge2);
+  #else
   float3 faceNormal = normalize(cross(edge1, edge2));
+  #endif
 
   //vertex 0 normal
-  const uint baseDstNormalOffset0 = (cb.dstNormalOffset + i0 * cb.dstNormalStride) / 4;
+  const uint baseDstNormalOffset0 = (cb.dstNormalOffset + posRemap[i0] * cb.dstNormalStride) / 4;
   InterlockedAddFloat(normals[baseDstNormalOffset0 + 0], faceNormal.x);
   InterlockedAddFloat(normals[baseDstNormalOffset0 + 1], faceNormal.y);
   InterlockedAddFloat(normals[baseDstNormalOffset0 + 2], faceNormal.z);
   //vertex 1 normal
-  const uint baseDstNormalOffset1 = (cb.dstNormalOffset + i1 * cb.dstNormalStride) / 4;
+  const uint baseDstNormalOffset1 = (cb.dstNormalOffset + posRemap[i1] * cb.dstNormalStride) / 4;
   InterlockedAddFloat(normals[baseDstNormalOffset1 + 0], faceNormal.x);
   InterlockedAddFloat(normals[baseDstNormalOffset1 + 1], faceNormal.y);
   InterlockedAddFloat(normals[baseDstNormalOffset1 + 2], faceNormal.z);
   //vertex 2 normal
-  const uint baseDstNormalOffset2 = (cb.dstNormalOffset + i2 * cb.dstNormalStride) / 4;
+  const uint baseDstNormalOffset2 = (cb.dstNormalOffset + posRemap[i2] * cb.dstNormalStride) / 4;
   InterlockedAddFloat(normals[baseDstNormalOffset2 + 0], faceNormal.x);
   InterlockedAddFloat(normals[baseDstNormalOffset2 + 1], faceNormal.y);
   InterlockedAddFloat(normals[baseDstNormalOffset2 + 2], faceNormal.z);
