@@ -259,7 +259,11 @@ namespace dxvk {
       free(m_vertexSortBuff);
       m_vertexSortBuff = nullptr;
     }
-    m_vertexSortBuffSz = 0;
+    if(m_vertexRemapBuff)
+    {
+      free(m_vertexRemapBuff);
+      m_vertexRemapBuff = nullptr;
+    }
   }
 
   void RtxGeometryUtils::dispatchSkinning(const DrawCallState& drawCallState,
@@ -810,45 +814,50 @@ namespace dxvk {
     return res;
   }
 
-  void RtxGeometryUtils::remapDuplicatedVertexes(const RasterBuffer& vertexBuffer, uint16_t *posRemapBuffer)
+  void RtxGeometryUtils::remapDuplicatedVertexes(const RasterBuffer& vertexBuffer)
   {
     struct VertexSortContext vsctx;
     vsctx.vertexBufferBase = (float*)vertexBuffer.mapPtr(0);
     vsctx.offsetFromSlice = vertexBuffer.offsetFromSlice();
     vsctx.stride = vertexBuffer.stride();
 
-    if(!posRemapBuffer)
-    {
-      return;
-    }
-
     const size_t segment = 128;
     const uint32_t numVertexes = align(vertexBuffer.length(), segment);
-    if(numVertexes * sizeof(uint16_t) > m_vertexSortBuffSz)
+    if(numVertexes > m_vertexBuffersSize)
     {
-      m_vertexSortBuffSz = numVertexes * sizeof(uint16_t);
+      m_vertexBuffersSize = numVertexes;
       if(m_vertexSortBuff)
         free(m_vertexSortBuff);
-      m_vertexSortBuff = (uint16_t*)malloc(m_vertexSortBuffSz);
+      m_vertexSortBuff = (uint16_t*)malloc(m_vertexBuffersSize * sizeof(uint16_t));
+      if(m_vertexRemapBuff)
+        free(m_vertexRemapBuff);
+      m_vertexRemapBuff = (uint16_t*)malloc(m_vertexBuffersSize * sizeof(uint16_t))
     }
+
+    //check for malloc failure
+    const auto vertexFormat = vertexBuffer.vertexFormat();
+    if(m_vertexSortBuff == nullptr || m_vertexRemapBuff == nullptr)
+    {
+      m_vertexSortBuffSz = 0;
+      if(m_vertexSortBuff)
+        free(m_vertexSortBuff);
+      if(m_vertexRemapBuff)
+        free(m_vertexRemapBuff);
+      return;
+    }
+    //unsupported vertex format
+    if(vertexFormat != VK_FORMAT_R32G32B32_SFLOAT)
+      return;
 
     //initialize the default buffer values: each vertex pos maps to itself
     for(int i = 0; i < numVertexes; i++)
     {
-      posRemapBuffer[i] = i;
-    }
-
-    //now that posremapbuffer is initialised, check for malloc failure and unsupported vertex format
-    const auto vertexFormat = vertexBuffer.vertexFormat();
-    if(m_vertexSortBuff == nullptr || vertexFormat != VK_FORMAT_R32G32B32_SFLOAT)
-    {
-      m_vertexSortBuffSz = 0;
-      return;
+      m_vertexSortBuff[i] = i;
     }
 
     for ( int i = 0; i < numVertexes; i++ )
     {
-      m_vertexSortBuff[i] = i;
+      m_vertexRemapBuff[i] = i;
     }
 
     qsort_s(m_vertexSortBuff, numVertexes, sizeof(uint16_t), vertexSort_comparefn, &vsctx);
@@ -861,7 +870,7 @@ namespace dxvk {
       const float* frontVertex = vertexPtrFromIndex(&vsctx, frontIndex);
       if ( 0 == vertexCompare( backVertex, frontVertex ) )
       {
-        posRemapBuffer[frontIndex] = backIndex;
+        m_vertexRemapBuff[frontIndex] = backIndex;
       }
       else
       {
@@ -872,25 +881,8 @@ namespace dxvk {
   }
   
   void RtxGeometryUtils::generateSmoothNormals(const Rc<DxvkContext>& ctx, const RasterGeometry& input, const RaytraceGeometry& geo) {
-    VkDeviceSize bufsz = align(input.vertexCount * sizeof(uint16_t), CACHE_LINE_SIZE);
-    if(bufsz > m_vertexRemapSz)
-    {
-      m_vertexRemapSz = bufsz;
-      if(m_vertexRemap != nullptr)
-      {
-        //m_vertexRemap->release(DxvkAccess::Write);
-        m_vertexRemap->decRef();
-      }
-      const Rc<DxvkDevice>& device = ctx->getDevice();
-      DxvkBufferCreateInfo info = { VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO };
-      info.size = bufsz;
-      info.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT | VK_BUFFER_USAGE_TRANSFER_SRC_BIT;
-      info.stages = VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT;
-      info.access = VK_ACCESS_TRANSFER_READ_BIT | VK_ACCESS_TRANSFER_WRITE_BIT  | VK_ACCESS_SHADER_READ_BIT;
-      m_vertexRemap = device->createBuffer(info, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_CACHED_BIT, DxvkMemoryStats::Category::RTXBuffer, "SmoothNormals VertexRemap");
-      //m_vertexRemap->acquire(DxvkAccess::Write);
-    }
-    remapDuplicatedVertexes(input.positionBuffer, (uint16_t*)(m_vertexRemap->mapPtr(0)));
+
+    remapDuplicatedVertexes(input.positionBuffer);
 
     dispatchGenSmoothNormals(ctx, input, geo);
   }
@@ -945,10 +937,18 @@ namespace dxvk {
     const bool useCPU = params.primCount <= kNumPrimitivesToProcessOnCPU && !pendingGpuWrite && !mustUseGPU;
 
     if (!useCPU) {
+      // Upload the vertex remapping data to a buffer slice
+      const auto& devInfo = ctx->getDevice()->properties().core.properties;
+      VkDeviceSize alignment = devInfo.limits.minUniformBufferOffsetAlignment;
+
+      DxvkBufferSlice cb = m_pCbData->alloc(alignment, m_vertexBuffersSize * sizeof(uint16_t));
+      memcpy(cb.mapPtr(0), m_vertexRemapBuff, m_vertexBuffersSize * sizeof(uint16_t));
+      ctx->getCommandList()->trackResource<DxvkAccess::Write>(cb.buffer());
+
       ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_INDEX_INPUT, geo.indexBuffer);
       ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_POSITION_INPUT, input.positionBuffer);
       ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_NORMAL_OUTPUT, input.normalBuffer);
-      ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_POSREMAP_INPUT, DxvkBufferSlice(m_vertexRemap));
+      ctx->bindResourceBuffer(GEN_SMOOTH_NORMALS_BINDING_POSREMAP_INPUT, cb);
 
       ctx->setPushConstantBank(DxvkPushConstantBank::RTX);
 
@@ -958,14 +958,14 @@ namespace dxvk {
 
       const VkExtent3D workgroups = util::computeBlockCount(VkExtent3D { params.primCount, 1, 1 }, VkExtent3D { 128, 1, 1 });
       ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
+      ctx->getCommandList()->trackResource<DxvkAccess::Read>(cb.buffer());
     } else {
       const float* srcPosition = reinterpret_cast<float*>(input.positionBuffer.mapPtr(0));
       const uint16_t* srcIndices = reinterpret_cast<uint16_t*>(input.indexBuffer.mapPtr(0));
       float* dstNormals = reinterpret_cast<float*>(input.normalBuffer.mapPtr(0));
-      const uint16_t* remapPos = reinterpret_cast<uint16_t*>(m_vertexRemap->mapPtr(0));
 
       for (uint32_t idx = 0; idx < params.primCount; idx++) {
-        dxvk::generateSmoothNormals(idx, srcIndices, srcPosition, dstNormals, remapPos, params);
+        dxvk::generateSmoothNormals(idx, srcIndices, srcPosition, dstNormals, m_vertexRemapBuff, params);
       }
     }
     #endif
@@ -1109,6 +1109,14 @@ namespace dxvk {
     const bool useGPU = input.vertexCount > kNumVerticesToProcessOnCPU || mustUseGPU;
 
     if (useGPU) {
+      // Upload the vertex remapping data to a buffer slice
+      const auto& devInfo = ctx->getDevice()->properties().core.properties;
+      VkDeviceSize alignment = devInfo.limits.minUniformBufferOffsetAlignment;
+
+      DxvkBufferSlice cb = m_pCbData->alloc(alignment, m_vertexBuffersSize * sizeof(uint16_t));
+      memcpy(cb.mapPtr(0), m_vertexRemapBuff, m_vertexBuffersSize * sizeof(uint16_t));
+      ctx->getCommandList()->trackResource<DxvkAccess::Write>(cb.buffer());
+
       ctx->bindResourceBuffer(INTERLEAVE_GEOMETRY_BINDING_OUTPUT, DxvkBufferSlice(output.buffer));
 
       ctx->bindResourceBuffer(INTERLEAVE_GEOMETRY_BINDING_POSITION_INPUT, input.positionBuffer);
@@ -1119,7 +1127,7 @@ namespace dxvk {
       if (args.hasColor0)
         ctx->bindResourceBuffer(INTERLEAVE_GEOMETRY_BINDING_COLOR0_INPUT, input.color0Buffer);
       if (args.hasPosRemap)
-        ctx->bindResourceBuffer(INTERLEAVE_GEOMETRY_BINDING_POSREMAP_INPUT, DxvkBufferSlice(m_vertexRemap));
+        ctx->bindResourceBuffer(INTERLEAVE_GEOMETRY_BINDING_POSREMAP_INPUT, cb);
 
       ctx->setPushConstantBank(DxvkPushConstantBank::RTX);
 
@@ -1129,6 +1137,8 @@ namespace dxvk {
 
       const VkExtent3D workgroups = util::computeBlockCount(VkExtent3D { input.vertexCount, 1, 1 }, VkExtent3D { 128, 1, 1 });
       ctx->dispatch(workgroups.width, workgroups.height, workgroups.depth);
+      
+      ctx->getCommandList()->trackResource<DxvkAccess::Read>(cb.buffer());
     } else {
       float dst[kNumVerticesToProcessOnCPU * kMaxInterleavedComponents];
 
@@ -1141,7 +1151,7 @@ namespace dxvk {
       args.color0Offset = 0;
 
       for (uint32_t i = 0; i < input.vertexCount; i++) {
-        interleaver::interleave(i, dst, inputData.positionData, inputData.normalData, inputData.texcoordData, inputData.vertexColorData, (uint16_t*)(m_vertexRemap->mapPtr(0)), args);
+        interleaver::interleave(i, dst, inputData.positionData, inputData.normalData, inputData.texcoordData, inputData.vertexColorData, (uint16_t*)(m_vertexRemapBuff), args);
       }
 
       ctx->writeToBuffer(output.buffer, 0, input.vertexCount * output.stride, dst);

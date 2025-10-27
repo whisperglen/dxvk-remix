@@ -51,9 +51,8 @@ namespace dxvk {
     Rc<DxvkContext> m_skinningContext;
     uint32_t m_skinningCommands = 0;
     uint16_t *m_vertexSortBuff = nullptr;
-    uint32_t m_vertexSortBuffSz = 0;
-    Rc<DxvkBuffer> m_vertexRemap = nullptr;
-    uint32_t m_vertexRemapSz = 0;
+    uint16_t *m_vertexRemapBuff = nullptr;
+    uint32_t m_vertexBuffersSize = 0;
 
   public:
     explicit RtxGeometryUtils(DxvkDevice* pDevice);
@@ -92,7 +91,7 @@ namespace dxvk {
     /**
      * \brief Detects Vertexes with the same 3D coordinates, and for each duplicated Vertex, posRemapBuffer will contain the position of the first Vertex in each chain
      */
-    void remapDuplicatedVertexes(const RasterBuffer& vertexBuffer, uint16_t *posRemapBuffer);
+    void remapDuplicatedVertexes(const RasterBuffer& vertexBuffer);
     
     /**
      * \brief Execute a compute shader to generate Face Normals and Vertex Smooth Normals
