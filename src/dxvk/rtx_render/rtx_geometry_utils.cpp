@@ -831,14 +831,14 @@ namespace dxvk {
       m_vertexSortBuff = (uint16_t*)malloc(m_vertexBuffersSize * sizeof(uint16_t));
       if(m_vertexRemapBuff)
         free(m_vertexRemapBuff);
-      m_vertexRemapBuff = (uint16_t*)malloc(m_vertexBuffersSize * sizeof(uint16_t))
+      m_vertexRemapBuff = (uint16_t*)malloc(m_vertexBuffersSize * sizeof(uint16_t));
     }
 
     //check for malloc failure
     const auto vertexFormat = vertexBuffer.vertexFormat();
     if(m_vertexSortBuff == nullptr || m_vertexRemapBuff == nullptr)
     {
-      m_vertexSortBuffSz = 0;
+      m_vertexBuffersSize = 0;
       if(m_vertexSortBuff)
         free(m_vertexSortBuff);
       if(m_vertexRemapBuff)
