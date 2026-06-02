@@ -58,6 +58,7 @@ class AccelManager : public CommonDeviceObject {
     uint32_t reorderedSurfacesOffset = UINT32_MAX;
     bool hasOmmInstances = false;
     bool hasSssInstances = false;
+    XXH64_hash_t stableBucketHash = 0;
     
     // Tries to add a geometry instance to the bucket. The addition is successful if either:
     //   a) the bucket is empty,

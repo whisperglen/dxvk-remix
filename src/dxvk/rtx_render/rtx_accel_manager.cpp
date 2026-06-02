@@ -158,6 +158,7 @@ namespace dxvk {
     for (auto& range : blasEntry->buildRanges) {
       originalInstances.push_back(instance);
       primitiveCounts.push_back(range.primitiveCount);
+      stableBucketHash ^= instance->getIndexHash() /*^ instance->getMaterialHash()*/;
     }
     instanceBillboardIndices.insert(instanceBillboardIndices.end(), instance->billboardIndices.begin(), instance->billboardIndices.end());
     indexOffsets.insert(indexOffsets.end(), instance->indexOffsets.begin(), instance->indexOffsets.end());
@@ -814,7 +815,8 @@ namespace dxvk {
 
       // Must ensure that if we are updating an existing blas, rather than rebuilding, the blas is compatible with our new build info
       // Cannot update a blas that contains OMM instances, this leads to sporadic device lost errors
-      if (!bucket->hasOmmInstances && selectedBlas && validateUpdateMode(selectedBlas->buildInfo, buildInfo) && selectedBlas->primitiveCounts == bucket->primitiveCounts) {
+      if (!bucket->hasOmmInstances && selectedBlas && validateUpdateMode(selectedBlas->buildInfo, buildInfo) &&
+           selectedBlas->primitiveCounts == bucket->primitiveCounts && selectedBlas->stableBucketHash == bucket->stableBucketHash) {
         buildInfo.mode = VK_BUILD_ACCELERATION_STRUCTURE_MODE_UPDATE_KHR;
       }
 
@@ -839,6 +841,7 @@ namespace dxvk {
 
       copyAccelerationStructureBuildGeometryInfo(buildInfo, selectedBlas->buildInfo);
       selectedBlas->primitiveCounts = bucket->primitiveCounts;
+      selectedBlas->stableBucketHash = bucket->stableBucketHash;
 
       // Allocate a scratch buffer slice
       const size_t requiredScratchAllocSize = align(sizeInfo.buildScratchSize + m_scratchAlignment, m_scratchAlignment);
